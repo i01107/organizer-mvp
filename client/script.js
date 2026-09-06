@@ -1,6 +1,13 @@
 // ── CONSTANTS ─────────────────────────────────────────────────
 const STORAGE_KEY = 'organizer_items';
 
+const ACTION_TYPES = [
+  { id: 'meeting',       label: 'Meeting',       icon: '📅', desc: 'Set up a meeting schedule' },
+  { id: 'search_vendor', label: 'Search Vendor', icon: '🔎', desc: 'Create a brief for the vendor search' },
+  { id: 'hold',          label: 'Hold',          icon: '⏸', desc: 'Put this action on hold' },
+  { id: 'reject',        label: 'Reject',        icon: '↩', desc: 'Mark this action as rejected' },
+];
+
 // ── MOCK DATA ────────────────────────────────────────────────
 const mockData = {
   clients: [
@@ -30,10 +37,24 @@ const mockData = {
 // ── STATE ──────────────────────────────────────────────────────
 let currentSentences = [];
 let pendingNewClient  = null; // 'modal' source flag
-let modal = { idx: null, step: 1, data: {} };
+let modal = { idx: null, step: 1, data: {}, reviewItemId: null };
 
 // ── STORAGE ───────────────────────────────────────────────────
 function normalizeItem(item) {
+  const actionType = ACTION_TYPES.some(action => action.id === item.actionType)
+    ? item.actionType
+    : null;
+  const needsFollowUp = ['meeting', 'search_vendor'].includes(actionType);
+  const decision = ['active', 'pending_review', 'held', 'rejected'].includes(item.decision)
+    ? item.decision
+    : actionType === 'hold'
+      ? 'held'
+      : actionType === 'reject'
+        ? 'rejected'
+        : actionType
+          ? 'active'
+          : 'pending_review';
+
   return {
     id:            item.id || crypto.randomUUID(),
     sentence:      item.sentence || '',
@@ -41,9 +62,19 @@ function normalizeItem(item) {
     campaign:      item.campaign || '',
     vendor:        item.vendor || '',
     vendorContact: item.vendorContact || '',
-    actionType:    item.actionType || null,
-    priority:      item.priority || null,
-    deadline:      item.deadline || null,
+    actionType,
+    decision,
+    priority:        needsFollowUp ? item.priority || null : null,
+    deadline:        needsFollowUp ? item.deadline || null : null,
+    meetingDate:     actionType === 'meeting' ? item.meetingDate || null : null,
+    meetingTime:     actionType === 'meeting' ? item.meetingTime || null : null,
+    meetingLocation: actionType === 'meeting' ? item.meetingLocation || '' : '',
+    vendorSearchNote: actionType === 'search_vendor' ? item.vendorSearchNote || '' : '',
+    reminderDate:    needsFollowUp ? item.reminderDate || null : null,
+    reminderTime:    needsFollowUp ? item.reminderTime || null : null,
+    holdReason:      actionType === 'hold' ? item.holdReason || '' : '',
+    reviewOn:        actionType === 'hold' ? item.reviewOn || null : null,
+    rejectionReason: actionType === 'reject' ? item.rejectionReason || '' : '',
     dateAdded:     item.dateAdded || new Date().toISOString(),
   };
 }
@@ -80,6 +111,15 @@ function fmtDate(iso) {
   if (!iso) return '—';
   const d = new Date(String(iso).slice(0, 10) + 'T00:00:00');
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function fmtDateTime(date, time) {
+  if (!date) return '—';
+  return `${fmtDate(date)}${time ? ` · ${time}` : ''}`;
+}
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function buildClientOptions(sel) {
@@ -129,6 +169,7 @@ function detectClient(sentence) {
 function openModal(idx) {
   modal.idx  = idx;
   modal.step = 1;
+  modal.reviewItemId = null;
 
   modal.data = {
     client: detectClient(currentSentences[idx]),
@@ -142,28 +183,57 @@ function openModal(idx) {
   $('#decisionModal').removeClass('hidden');
 }
 
+function openReviewModal(id) {
+  const item = loadItems().find(entry => entry.id === id);
+  if (!item) return;
+
+  modal = {
+    idx: null,
+    step: 1,
+    data: { ...item, actionType: null, decision: 'pending_review' },
+    reviewItemId: id
+  };
+  $('#modalSentence').val(modal.data.sentence);
+  $('#decisionModalTitle').text('Review decision');
+  populateStep1();
+  showStep(1);
+  $('#decisionModal').removeClass('hidden');
+}
+
 function closeModal() {
   $('#decisionModal').addClass('hidden');
-  modal = { idx: null, step: 1, data: {} };
+  modal = { idx: null, step: 1, data: {}, reviewItemId: null };
 }
 
 function showStep(n) {
   modal.step = n;
-  $('#step1, #step2').addClass('hidden');
+  $('#step1, #step2, #step3').addClass('hidden');
   $(`#step${n}`).removeClass('hidden');
 
-  const labels = { 1: 'Context', 2: 'Action details' };
-  $('#stepLabel').text(`Step ${n} of 2 — ${labels[n]}`);
+  const labels = { 1: 'Context', 2: 'Action', 3: 'Action setup' };
+  const stepCount = modalNeedsSetup() ? 3 : 2;
+  $('#stepLabel').text(`Step ${n} of ${stepCount} — ${labels[n]}`);
 
   // Animate step dots: white = reached, semi-transparent = future
   $('.step-dot').each(function () {
     const s = +$(this).data('step');
+    $(this).toggleClass('hidden', s > stepCount);
     $(this).css('background-color', s <= n ? 'rgba(255,255,255,1)' : 'rgba(255,255,255,0.3)');
   });
 
   $('#modalBackBtn').toggleClass('hidden', n === 1);
-  $('#modalNextBtn').toggleClass('hidden', n === 2);
-  $('#modalSaveBtn').toggleClass('hidden', n !== 2);
+  const canSave = n === stepCount && (n !== 2 || Boolean(modal.data.actionType));
+  $('#modalNextBtn').toggleClass('hidden', canSave);
+  $('#modalSaveBtn').toggleClass('hidden', !canSave);
+  $('#modalSaveBtn').text(isTerminalAction() ? 'Save action' : 'Save');
+}
+
+function modalNeedsSetup() {
+  return ['meeting', 'search_vendor'].includes(modal.data.actionType);
+}
+
+function isTerminalAction() {
+  return ['hold', 'reject'].includes(modal.data.actionType);
 }
 
 // ── STEP 1: CONTEXT ───────────────────────────────────────────
@@ -205,22 +275,12 @@ function collectStep1() {
   modal.data.vendorContact = $('#m_vendorContact').val().trim();
 }
 
-// ── STEP 2: ACTION DETAILS ─────────────────────────────────────
+// ── STEP 2: ACTION ─────────────────────────────────────────────
 function fg(label, content) {
   return `<div class="space-y-1.5">
     <label class="text-base font-semibold text-gray-500 uppercase tracking-wide">${label}</label>
     <div>${content}</div>
   </div>`;
-}
-
-function optChips(groupId, options, selVal) {
-  const btns = options.map(o => {
-    const active = o.v === selVal;
-    return `<button type="button" class="opt-chip px-3 py-1.5 rounded-lg border-2 text-base font-semibold transition-all
-             ${active ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-blue-100 text-gray-600 hover:border-blue-300'}"
-            data-group="${groupId}" data-value="${o.v}">${o.l}</button>`;
-  }).join('');
-  return `<div class="flex flex-wrap gap-2" id="${groupId}">${btns}</div>`;
 }
 
 function priorityRow(sel) {
@@ -236,59 +296,168 @@ function priorityRow(sel) {
 }
 
 function populateStep2() {
+  const actionOptions = ACTION_TYPES.map(action => {
+    const active = modal.data.actionType === action.id;
+    return `<button type="button" class="action-chip text-left p-3 rounded-xl border-2 transition-all
+             ${active ? 'border-blue-600 bg-blue-50' : 'border-blue-100 hover:border-blue-300 bg-white'}"
+            data-value="${action.id}">
+      <div class="text-xl mb-1">${action.icon}</div>
+      <div class="text-base font-semibold text-gray-700">${action.label}</div>
+      <div class="text-base text-gray-400 mt-0.5 leading-tight">${action.desc}</div>
+    </button>`;
+  }).join('');
+
+  const actionDetails = modalNeedsSetup()
+    ? [
+        fg('Priority', priorityRow(modal.data.priority)),
+        fg('Preparation deadline', `<input type="date" id="m_deadline" value="${esc(modal.data.deadline || '')}"
+          class="border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />
+          <span class="text-base text-gray-400 ml-2">Leave blank if none</span>`),
+        fg('Reminder', `<div class="flex flex-wrap gap-2 items-center">
+          <input type="date" id="m_reminderDate" value="${esc(modal.data.reminderDate || '')}"
+            class="border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />
+          <input type="time" id="m_reminderTime" value="${esc(modal.data.reminderTime || '')}"
+            class="border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />
+          <span class="text-base text-gray-400">Optional</span>
+        </div>`),
+      ].join('')
+    : modal.data.actionType === 'hold'
+      ? [
+          fg('Reason for holding', `<textarea id="m_holdReason" rows="3" placeholder="Why should this wait? (optional)"
+            class="w-full resize-y rounded-lg border border-blue-100 bg-white px-3 py-2 text-sm text-gray-700 leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-300">${esc(modal.data.holdReason || '')}</textarea>`),
+          fg('Review on', `<input type="date" id="m_reviewOn" value="${esc(modal.data.reviewOn || '')}"
+            class="border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />
+            <span class="text-base text-gray-400 ml-2">Required</span>`),
+        ].join('')
+    : modal.data.actionType === 'reject'
+      ? fg('Reason for rejecting', `<textarea id="m_rejectionReason" rows="3" placeholder="Why is this not moving forward? (optional)"
+          class="w-full resize-y rounded-lg border border-blue-100 bg-white px-3 py-2 text-sm text-gray-700 leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-300">${esc(modal.data.rejectionReason || '')}</textarea>`)
+    : '';
+
   const inner = [
-    fg('Action', optChips('g_action', [
-      {v:'message',l:'💬 Message'}, {v:'meeting',l:'📅 Meeting'},
-      {v:'document',l:'📄 Document'}, {v:'payment',l:'💳 Payment'}, {v:'other',l:'⚙️ Other'},
-    ], modal.data.actionType)),
-    fg('Priority', priorityRow(modal.data.priority)),
-    fg('Deadline', `<input type="date" id="m_deadline" value="${esc(modal.data.deadline || '')}"
-      class="border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />
-      <span class="text-base text-gray-400 ml-2">Leave blank if none</span>`),
+    '<p class="text-sm text-gray-500">What should happen with this item?</p>',
+    `<div class="grid grid-cols-2 gap-2.5">${actionOptions}</div>`,
+    actionDetails,
   ].join('');
   $('#step2').html(`<div class="space-y-4">${inner}</div>`);
 }
 
 function collectStep2() {
-  modal.data.actionType = $('#g_action .opt-chip.border-blue-600').data('value') || null;
-  modal.data.priority   = $('.pri-chip.bg-blue-600').data('value') || null;
-  modal.data.deadline   = $('#m_deadline').val() || null;
+  modal.data.priority = modalNeedsSetup()
+    ? $('.pri-chip.bg-blue-600').data('value') || null
+    : null;
+  modal.data.deadline = modalNeedsSetup() ? $('#m_deadline').val() || null : null;
+  modal.data.reminderDate = modalNeedsSetup() ? $('#m_reminderDate').val() || null : null;
+  modal.data.reminderTime = modalNeedsSetup() ? $('#m_reminderTime').val() || null : null;
+  modal.data.holdReason = modal.data.actionType === 'hold' ? $('#m_holdReason').val().trim() : '';
+  modal.data.reviewOn = modal.data.actionType === 'hold' ? $('#m_reviewOn').val() || null : null;
+  modal.data.rejectionReason = modal.data.actionType === 'reject' ? $('#m_rejectionReason').val().trim() : '';
+}
+
+// ── STEP 3: ACTION SETUP ───────────────────────────────────────
+function populateStep3() {
+  let inner = '';
+
+  if (modal.data.actionType === 'meeting') {
+    inner = [
+      fg('Meeting date', `<input type="date" id="m_meetingDate" value="${esc(modal.data.meetingDate || '')}"
+        class="border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />`),
+      fg('Start time', `<input type="time" id="m_meetingTime" value="${esc(modal.data.meetingTime || '')}"
+        class="border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />`),
+      fg('Location or meeting link', `<input type="text" id="m_meetingLocation" value="${esc(modal.data.meetingLocation || '')}"
+        placeholder="e.g. Google Meet or Client office"
+        class="w-full border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />`),
+    ].join('');
+  } else if (modal.data.actionType === 'search_vendor') {
+    inner = fg('Vendor search note', `<textarea id="m_vendorSearchNote" rows="5"
+      placeholder="Describe the vendor, capabilities, budget, or other requirements to search for."
+      class="w-full resize-y rounded-lg border border-blue-100 bg-white px-3 py-2 text-sm text-gray-700 leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-300">${esc(modal.data.vendorSearchNote || '')}</textarea>`);
+  }
+
+  $('#step3').html(`<div class="space-y-4">${inner}</div>`);
+}
+
+function collectStep3() {
+  if (modal.data.actionType === 'meeting') {
+    modal.data.meetingDate = $('#m_meetingDate').val() || null;
+    modal.data.meetingTime = $('#m_meetingTime').val() || null;
+    modal.data.meetingLocation = $('#m_meetingLocation').val().trim();
+  } else if (modal.data.actionType === 'search_vendor') {
+    modal.data.vendorSearchNote = $('#m_vendorSearchNote').val().trim();
+  }
 }
 
 // ── SAVE ──────────────────────────────────────────────────────
-function commitSave() {
-  collectStep2();
+function buildItem(decision, actionType = modal.data.actionType || null) {
+  const needsFollowUp = ['meeting', 'search_vendor'].includes(actionType);
   modal.data.sentence = $('#modalSentence').val().trim() || currentSentences[modal.idx];
-  const item = {
-    id:            modal.data.id            || crypto.randomUUID(),
+  return {
+    id:            modal.reviewItemId || modal.data.id || crypto.randomUUID(),
     sentence:      modal.data.sentence,
     client:        modal.data.client        || '',
     campaign:      modal.data.campaign      || '',
     vendor:        modal.data.vendor        || '',
     vendorContact: modal.data.vendorContact || '',
-    actionType:    modal.data.actionType    || null,
-    priority:      modal.data.priority      || null,
-    deadline:      modal.data.deadline      || null,
+    actionType,
+    decision,
+    priority:      needsFollowUp ? modal.data.priority || null : null,
+    deadline:      needsFollowUp ? modal.data.deadline || null : null,
+    meetingDate:     actionType === 'meeting' ? modal.data.meetingDate || null : null,
+    meetingTime:     actionType === 'meeting' ? modal.data.meetingTime || null : null,
+    meetingLocation: actionType === 'meeting' ? modal.data.meetingLocation || '' : '',
+    vendorSearchNote: actionType === 'search_vendor' ? modal.data.vendorSearchNote || '' : '',
+    reminderDate: needsFollowUp ? modal.data.reminderDate || null : null,
+    reminderTime: needsFollowUp ? modal.data.reminderTime || null : null,
+    holdReason: actionType === 'hold' ? modal.data.holdReason || '' : '',
+    reviewOn: actionType === 'hold' ? modal.data.reviewOn || null : null,
+    rejectionReason: actionType === 'reject' ? modal.data.rejectionReason || '' : '',
     dateAdded:     modal.data.dateAdded     || new Date().toISOString(),
   };
+}
+
+function continueToNextSentence() {
+  if (Number.isInteger(modal.idx)) {
+    const nextIdx = modal.idx + 1;
+    if (nextIdx < currentSentences.length) {
+      openModal(nextIdx);
+      return;
+    }
+  }
+  closeModal();
+}
+
+function commitSave() {
+  if (modal.step === 3) collectStep3(); else collectStep2();
+  const decision = modal.data.actionType === 'hold'
+    ? 'held'
+    : modal.data.actionType === 'reject'
+      ? 'rejected'
+      : 'active';
+  const item = buildItem(decision);
   upsertItem(item);
   renderTable();
+  continueToNextSentence();
+}
 
-  const nextIdx = modal.idx + 1;
-  if (nextIdx < currentSentences.length) {
-    openModal(nextIdx);
-  } else {
-    closeModal();
-  }
+function skipForNow() {
+  if (modal.step === 1) collectStep1();
+  if (modal.step === 2) collectStep2();
+  if (modal.step === 3) collectStep3();
+  upsertItem(buildItem('pending_review', null));
+  renderTable();
+  continueToNextSentence();
 }
 
 // ── TABLE ─────────────────────────────────────────────────────
 function renderTable() {
   const items = loadItems();
-  if (!items.length) { $('#tableSection').addClass('hidden'); return; }
+  const activeItems = items.filter(item => item.decision === 'active');
+  const reviewItems = items.filter(item => item.decision === 'pending_review'
+    || (item.decision === 'held' && (!item.reviewOn || item.reviewOn <= todayIso())));
+  const rejectedItems = items.filter(item => item.decision === 'rejected');
 
   // Sort: priority desc (5 = highest, null = last), then deadline asc (null = last)
-  items.sort((a, b) => {
+  activeItems.sort((a, b) => {
     const pa = a.priority || 0, pb = b.priority || 0;
     if (pa !== pb) return pb - pa;
     if (!a.deadline && !b.deadline) return 0;
@@ -297,12 +466,12 @@ function renderTable() {
     return new Date(a.deadline) - new Date(b.deadline);
   });
 
-  $('#itemCount').text(`${items.length} item${items.length !== 1 ? 's' : ''}`);
+  $('#itemCount').text(`${activeItems.length} item${activeItems.length !== 1 ? 's' : ''}`);
 
-  const ACT = { message: 'Message', meeting: 'Meeting', document: 'Document', payment: 'Payment', other: 'Other' };
+  const ACT = Object.fromEntries(ACTION_TYPES.map(action => [action.id, action.label]));
   const PRI_CLASS = { 5: 'text-red-600 font-bold', 4: 'text-orange-500 font-semibold', 3: 'text-amber-500 font-medium' };
 
-  const rows = items.map(item => {
+  const rows = activeItems.map(item => {
     const priClass  = PRI_CLASS[item.priority]   || 'text-gray-400';
 
     return `<tr class="hover:bg-blue-50/40 transition-colors">
@@ -318,12 +487,37 @@ function renderTable() {
           : '<span class="text-gray-300 text-sm">—</span>'}
       </td>
       <td class="px-4 py-3 text-base text-gray-600 whitespace-nowrap">${fmtDate(item.deadline)}</td>
+      <td class="px-4 py-3 text-base text-gray-600 whitespace-nowrap">${fmtDateTime(item.reminderDate, item.reminderTime)}</td>
       <td class="px-4 py-3 text-base text-gray-400 whitespace-nowrap">${fmtDate(item.dateAdded)}</td>
     </tr>`;
-  }).join('');
+  }).join('') || `<tr><td colspan="8" class="px-4 py-8 text-center text-sm text-gray-400">No active items right now.</td></tr>`;
 
   $('#tableBody').html(rows);
-  $('#tableSection').removeClass('hidden');
+  $('#tableSection').toggleClass('hidden', !items.length);
+
+  const reviewRows = reviewItems.map(item => {
+    const held = item.decision === 'held';
+    const reason = held ? item.holdReason || 'Held item is ready for review' : 'Skipped for later review';
+    return `<tr class="hover:bg-blue-50/40 transition-colors">
+      <td class="px-4 py-3 max-w-[280px]"><p class="text-base text-gray-700 leading-relaxed line-clamp-2" title="${esc(item.sentence)}">${esc(item.sentence)}</p></td>
+      <td class="px-4 py-3 text-base text-gray-600">${esc(reason)}</td>
+      <td class="px-4 py-3 text-base text-gray-600 whitespace-nowrap">${held ? fmtDate(item.reviewOn) : '—'}</td>
+      <td class="px-4 py-3 text-right"><button class="review-item border border-blue-200 text-blue-700 font-semibold px-3 py-1.5 rounded-lg text-sm hover:bg-blue-50 transition" data-item-id="${esc(item.id)}">Review</button></td>
+    </tr>`;
+  }).join('');
+  $('#reviewCount').text(`${reviewItems.length} item${reviewItems.length !== 1 ? 's' : ''}`);
+  $('#reviewTableBody').html(reviewRows);
+  $('#reviewSection').toggleClass('hidden', !reviewItems.length);
+
+  const rejectedRows = rejectedItems.map(item => `<tr class="hover:bg-blue-50/40 transition-colors">
+    <td class="px-4 py-3 max-w-[280px]"><p class="text-base text-gray-700 leading-relaxed line-clamp-2" title="${esc(item.sentence)}">${esc(item.sentence)}</p></td>
+    <td class="px-4 py-3 text-base text-gray-600">${esc(item.rejectionReason || 'No reason given')}</td>
+    <td class="px-4 py-3 text-base text-gray-400 whitespace-nowrap">${fmtDate(item.dateAdded)}</td>
+    <td class="px-4 py-3 text-right"><button class="restore-item border border-blue-200 text-blue-700 font-semibold px-3 py-1.5 rounded-lg text-sm hover:bg-blue-50 transition" data-item-id="${esc(item.id)}">Restore</button></td>
+  </tr>`).join('');
+  $('#rejectedCount').text(`${rejectedItems.length} item${rejectedItems.length !== 1 ? 's' : ''}`);
+  $('#rejectedTableBody').html(rejectedRows);
+  $('#rejectedSection').toggleClass('hidden', !rejectedItems.length);
 }
 
 // ── EVENT: Analyze ─────────────────────────────────────────────
@@ -358,15 +552,12 @@ $(document).on('change', '#m_client', function () {
   $('#m_campaign').html(buildCampaignOptions(val, ''));
 });
 
-// ── EVENT: Option chip (action group) ─────────────────────────
-$(document).on('click', '.opt-chip', function () {
-  const g = $(this).data('group');
-  $(`[data-group="${g}"]`)
-    .removeClass('border-blue-600 bg-blue-50 text-blue-700')
-    .addClass('border-blue-100 text-gray-600');
-  $(this)
-    .addClass('border-blue-600 bg-blue-50 text-blue-700')
-    .removeClass('border-blue-100 text-gray-600');
+// ── EVENT: Action selection ───────────────────────────────────
+$(document).on('click', '.action-chip', function () {
+  collectStep2();
+  modal.data.actionType = $(this).data('value');
+  populateStep2();
+  showStep(2);
 });
 
 // ── EVENT: Priority chip ───────────────────────────────────────
@@ -389,6 +580,18 @@ $('#modalNextBtn').on('click', function () {
     }
     populateStep2();
     showStep(2);
+  } else if (modal.step === 2) {
+    collectStep2();
+    if (!modal.data.actionType) {
+      alert('Please select an action before proceeding.');
+      return;
+    }
+    if (isTerminalAction()) {
+      commitSave();
+      return;
+    }
+    populateStep3();
+    showStep(3);
   }
 });
 
@@ -398,11 +601,71 @@ $('#modalBackBtn').on('click', function () {
     collectStep2();
     populateStep1();
     showStep(1);
+  } else if (modal.step === 3) {
+    collectStep3();
+    populateStep2();
+    showStep(2);
   }
 });
 
 // ── EVENT: Modal Save ─────────────────────────────────────────
-$('#modalSaveBtn').on('click', commitSave);
+$('#modalSaveBtn').on('click', function () {
+  if (!modal.data.actionType) {
+    alert('Please select an action before saving.');
+    return;
+  }
+
+  if (modal.step === 3) {
+    collectStep3();
+    if (modal.data.actionType === 'meeting' && !modal.data.meetingDate) {
+      alert('Please set the meeting date before saving.');
+      return;
+    }
+    if (modal.data.actionType === 'search_vendor' && !modal.data.vendorSearchNote) {
+      alert('Please enter a vendor search note before saving.');
+      return;
+    }
+  }
+
+  if (modal.step === 2) collectStep2();
+  if (modal.data.actionType === 'hold' && !modal.data.reviewOn) {
+    alert('Please set a review date before holding this item.');
+    return;
+  }
+  if (modal.data.reminderTime && !modal.data.reminderDate) {
+    alert('Please set a reminder date when choosing a reminder time.');
+    return;
+  }
+
+  commitSave();
+});
+
+// ── EVENT: Skip / review / restore ────────────────────────────
+$('#modalSkipBtn').on('click', skipForNow);
+
+$(document).on('click', '.review-item', function () {
+  openReviewModal($(this).data('item-id'));
+});
+
+$(document).on('click', '.restore-item', function () {
+  const id = $(this).data('item-id');
+  const items = loadItems();
+  const item = items.find(entry => entry.id === id);
+  if (!item) return;
+  item.actionType = null;
+  item.decision = 'pending_review';
+  item.rejectionReason = '';
+  upsertItem(item);
+  renderTable();
+});
+
+// ── EVENT: Reset saved app data ───────────────────────────────
+$('#resetBtn').on('click', function () {
+  const confirmed = window.confirm('Reset all saved items? This cannot be undone.');
+  if (!confirmed) return;
+  localStorage.removeItem(STORAGE_KEY);
+  renderTable();
+});
 
 // ── NEW CLIENT MODAL ──────────────────────────────────────────
 $('#cancelNewClient').on('click', function () {

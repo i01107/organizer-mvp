@@ -91,3 +91,34 @@ I want to update whole app data. For now, remove :
 - Who Acts
 and all the codes which related to those column
 <!-- End of Task 7 -->
+
+# Task 8
+## Context
+I want you to update the whole app. Action types are now :
+- "Meeting", this will lead to schedule setup step
+- "Search Vendor", this will lead to a step to enter a note regarding the vendor
+- "Hold", this will only set the action into hold state
+- "Reject", this will only set the action into reject state
+
+The rest of the functionality remain unchanged
+<!-- End of Task 8 -->
+
+# Task 9
+## Context
+I want you to analyze the flow of the wizard for every sentence. I want you to advice me whether it is already good.
+
+If you have any better idea based on similar app out there, propose the features to me. Specially following the new action types
+<!-- End of Task 9 -->
+
+# Task 10
+## Context
+Improve the wizard and saved data while keeping the current core flow: one sentence at a time, client/campaign context, then an action choice.
+
+1. Add a **Skip for now** option to every sentence decision. It must not discard the sentence. Save it as a pending decision so I can review it later, and move immediately to the next detected sentence.
+2. Improve **Hold** so it is a snooze instead of a permanent dead end. Ask for an optional reason and a required **Review on** date. Keep held items out of the active table until that date, then make them available for review again.
+3. Improve **Reject** so it is reversible. Ask for an optional rejection reason. Keep rejected items out of the active table, but retain them in storage and provide a way to restore them.
+4. For **Meeting**, separate the scheduled meeting date/time from the work deadline. Keep the existing deadline field as the preparation deadline, and label it clearly. The meeting schedule fields must remain separate in the data and UI.
+5. Add reminders before any WhatsApp integration. Support an optional reminder date and time for Meeting and Search Vendor actions. Store it in the item JSON and show it in the saved-items table. Browser notifications are not required yet; this task is only for collecting, storing, and displaying reminder data.
+
+Keep the existing styling, localStorage persistence, automatic sentence-by-sentence flow, and current action types. Migrate existing localStorage records safely so new fields have sensible empty values and no saved items are lost.
+<!-- End of Task 10 -->
