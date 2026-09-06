@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>My Productivity Tool</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontSize: {
+            // /* Perfect fourth scale: base 16px, ratio ~1.333 */
+            // 'xs':   ['0.563rem', { lineHeight: '0.875rem' }],
+            // 'sm':   ['0.75rem',  { lineHeight: '1rem'     }],
+            // 'base': ['1rem',     { lineHeight: '1.5rem'   }],
+            // 'md':   ['1.333rem', { lineHeight: '1.75rem'  }],
+            // 'lg':   ['1.777rem', { lineHeight: '2.25rem'  }],
+            // 'xl':   ['2.369rem', { lineHeight: '2.75rem'  }],
+            // '2xl':  ['3.157rem', { lineHeight: '3.5rem'   }],
+            // '3xl':  ['4.209rem', { lineHeight: '4.5rem'   }],
+            // '4xl':  ['5.61rem',  { lineHeight: '6rem'     }],
+            /* Third minor scale: base 16px, ratio ~0.8 */
+            'xs':   ['0.512rem',  { lineHeight: '0.8rem'  }],
+            'sm':   ['0.64rem',   { lineHeight: '1rem'    }],
+            'base': ['0.8rem',    { lineHeight: '1.25rem' }],
+            'md':   ['1rem',      { lineHeight: '1.5rem'  }],
+            'lg':   ['1.25rem',   { lineHeight: '1.75rem' }],
+            'xl':   ['1.563rem',  { lineHeight: '2rem'    }],
+            '2xl':  ['1.953rem',  { lineHeight: '2.5rem'  }],
+            '3xl':  ['2.441rem',  { lineHeight: '3rem'    }],
+            '4xl':  ['3.052rem',  { lineHeight: '3.5rem'  }],
+          }
+        }
+      }
+    }
+  </script>
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="compromise.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .card-enter { animation: fadeSlideIn 0.3s ease forwards; }
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0);    }
+    }
+    .priority-btn.active { @apply ring-2 ring-offset-1; }
+    /* Custom scrollbar for textarea */
+    textarea::-webkit-scrollbar { width: 6px; }
+    textarea::-webkit-scrollbar-track { background: transparent; }
+    textarea::-webkit-scrollbar-thumb { background: #bfdbfe; border-radius: 3px; }
+  </style>
+</head>
+<body class="min-h-screen bg-blue-50 py-10 px-4">
+
+  <!-- ── MAIN CONTAINER ─────────────────────────────────────── -->
+  <div class="max-w-4xl mx-auto space-y-8">
+
+    <!-- Title -->
+    <div class="text-center">
+      <h1 class="text-4xl font-bold text-blue-900 tracking-tight">My Productivity Tool</h1>
+      <p class="text-md text-blue-400 mt-1 font-light">Capture notes. Extract actions. Stay ahead.</p>
+    </div>
+
+    <!-- Note Input -->
+    <div class="bg-white rounded-2xl shadow-sm border border-blue-100 p-6 space-y-4">
+      <label class="block text-lg font-semibold text-blue-800">Free Note</label>
+      <textarea
+        id="noteInput"
+        rows="7"
+        placeholder="Write anything… clients, follow-ups, deadlines. Don't worry about format."
+        class="w-full resize-none rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-md text-gray-700 placeholder-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-300 transition"
+      ></textarea>
+      <div class="flex justify-end">
+        <button
+          id="analyzeBtn"
+          class="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-md font-semibold px-6 py-2.5 rounded-xl shadow transition-all duration-150"
+        >
+          Analyze Notes
+        </button>
+      </div>
+    </div>
+
+    <!-- Saved Items Table -->
+    <div id="tableSection" class="hidden space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-xl font-bold text-blue-800">Saved Items</h2>
+        <span id="itemCount" class="text-sm text-blue-400 bg-blue-50 px-3 py-1 rounded-full">0 items</span>
+      </div>
+      <div class="bg-white rounded-2xl border border-blue-100 shadow-sm overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="min-w-[700px] w-full text-sm">
+            <thead>
+              <tr class="bg-blue-50 text-left border-b border-blue-100">
+                <th class="px-4 py-3 text-base font-semibold text-blue-700 uppercase tracking-wide">Sentence</th>
+                <th class="px-4 py-3 text-base font-semibold text-blue-700 uppercase tracking-wide">Client</th>
+                <th class="px-4 py-3 text-base font-semibold text-blue-700 uppercase tracking-wide">Campaign</th>
+                <th class="px-4 py-3 text-base font-semibold text-blue-700 uppercase tracking-wide">Action</th>
+                <th class="px-4 py-3 text-base font-semibold text-blue-700 uppercase tracking-wide text-center">Priority</th>
+                <th class="px-4 py-3 text-base font-semibold text-blue-700 uppercase tracking-wide">Deadline</th>
+                <th class="px-4 py-3 text-base font-semibold text-blue-700 uppercase tracking-wide">Added</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody" class="divide-y divide-blue-50"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── NEW CLIENT MODAL ───────────────────────────────────── -->
+  <div id="newClientModal" class="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6 space-y-4">
+      <h3 class="text-lg font-bold text-blue-900">Add New Client</h3>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-600 mb-1">Client Name</label>
+          <input id="newClientName" type="text" placeholder="e.g. Bonteh"
+            class="w-full border border-blue-100 rounded-lg px-3 py-2 text-md focus:outline-none focus:ring-2 focus:ring-blue-300" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-600 mb-1">Default Project (optional)</label>
+          <input id="newClientProject" type="text" placeholder="e.g. Campaign Q3"
+            class="w-full border border-blue-100 rounded-lg px-3 py-2 text-md focus:outline-none focus:ring-2 focus:ring-blue-300" />
+        </div>
+      </div>
+      <div class="flex gap-3 pt-1">
+        <button id="cancelNewClient" class="flex-1 border border-blue-200 text-blue-700 font-medium py-2 rounded-xl text-sm hover:bg-blue-50 transition">Cancel</button>
+        <button id="confirmNewClient" class="flex-1 bg-blue-600 text-white font-semibold py-2 rounded-xl text-sm hover:bg-blue-700 transition">Add Client</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── DECISION MODAL ────────────────────────────────────── -->
+  <div id="decisionModal" class="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 hidden">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 flex flex-col" style="max-height:90vh">
+
+      <!-- Header with step indicator -->
+      <div class="bg-gradient-to-br from-blue-600 to-blue-700 rounded-t-2xl px-6 py-5 shrink-0">
+        <div class="flex items-center justify-between mb-4">
+          <h3 id="decisionModalTitle" class="text-white font-bold text-md tracking-tight">Assign Action</h3>
+          <button id="closeDecisionModal" class="text-white/60 hover:text-white text-xl leading-none transition">✕</button>
+        </div>
+        <div class="flex gap-1.5 mb-2">
+          <div class="step-dot h-1 rounded-full transition-all duration-300" data-step="1" style="flex:1"></div>
+          <div class="step-dot h-1 rounded-full transition-all duration-300" data-step="2" style="flex:1"></div>
+        </div>
+        <p id="stepLabel" class="text-white/70 text-xs">Step 1 of 2 — Context</p>
+      </div>
+
+      <!-- Editable sentence -->
+      <div class="px-6 py-3 bg-blue-50 border-b border-blue-100 shrink-0">
+        <label for="modalSentence" class="block text-xs font-semibold text-blue-500 uppercase tracking-wide mb-1">Sentence</label>
+        <textarea id="modalSentence" rows="3" aria-label="Sentence to classify"
+          class="w-full resize-y rounded-lg border border-blue-100 bg-white/80 px-3 py-2 text-sm text-gray-700 leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-300 transition"></textarea>
+        <p class="mt-1 text-xs text-blue-400">Edit the detected sentence before saving its decision.</p>
+      </div>
+
+      <!-- Step content (scrollable) -->
+      <div class="px-6 py-5 overflow-y-auto flex-1 min-h-0">
+        <div id="step1" class="space-y-4"></div>
+        <div id="step2" class="hidden"></div>
+      </div>
+
+      <!-- Footer -->
+      <div class="px-6 py-4 border-t border-blue-50 flex gap-3 shrink-0">
+        <button id="modalBackBtn" class="hidden flex-1 border border-blue-200 text-blue-600 font-semibold py-2.5 rounded-xl text-sm hover:bg-blue-50 transition">← Back</button>
+        <button id="modalNextBtn" class="flex-1 bg-blue-600 text-white font-semibold py-2.5 rounded-xl text-sm hover:bg-blue-700 active:scale-95 transition-all shadow-sm">Next →</button>
+        <button id="modalSaveBtn" class="hidden flex-1 bg-blue-600 text-white font-semibold py-2.5 rounded-xl text-sm hover:bg-blue-700 active:scale-95 transition-all shadow-sm">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
