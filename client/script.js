@@ -1,6 +1,6 @@
 $(function () {
   var KEY = 'notesTriage.items.v1';
-  var API_BASE_URL = window.NOTES_TRIAGE_API_BASE_URL || 'http://localhost:3000';
+  var API_BASE_URL = window.NOTES_TRIAGE_API_BASE_URL || 'https://organizer-mvp-api.onrender.com';
   var mode = 'standard';
   var ACTIONS = {
     meeting:  {label: 'Create meeting',  key: 'M'},
