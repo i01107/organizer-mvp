@@ -1,702 +1,286 @@
-// ── CONSTANTS ─────────────────────────────────────────────────
-const STORAGE_KEY = 'organizer_items';
-
-const ACTION_TYPES = [
-  { id: 'meeting',       label: 'Meeting',       icon: '📅', desc: 'Set up a meeting schedule' },
-  { id: 'search_vendor', label: 'Search Vendor', icon: '🔎', desc: 'Create a brief for the vendor search' },
-  { id: 'hold',          label: 'Hold',          icon: '⏸', desc: 'Put this action on hold' },
-  { id: 'reject',        label: 'Reject',        icon: '↩', desc: 'Mark this action as rejected' },
-];
-
-// ── MOCK DATA ────────────────────────────────────────────────
-const mockData = {
-  clients: [
-    {
-      name: 'Bonteh',
-      projects: ['Campus Ambassador', 'Warkop Campaign', 'StandupIndo Bogor', 'General']
-    },
-    {
-      name: 'WRPR',
-      projects: ['Vendor Briefing', 'Budget Planning']
-    },
-    {
-      name: 'Atisfyreach',
-      projects: ['3-Month Proposal', 'Influencer Campaign', 'AI Campaign']
-    },
-    {
-      name: 'Playup',
-      projects: ['Warkop Activation', 'Jingle Production', 'TJ Campaign']
-    },
-    {
-      name: 'TJ',
-      projects: ['Bus Campaign', 'General']
-    }
-  ]
-};
-
-// ── STATE ──────────────────────────────────────────────────────
-let currentSentences = [];
-let pendingNewClient  = null; // 'modal' source flag
-let modal = { idx: null, step: 1, data: {}, reviewItemId: null };
-
-// ── STORAGE ───────────────────────────────────────────────────
-function normalizeItem(item) {
-  const actionType = ACTION_TYPES.some(action => action.id === item.actionType)
-    ? item.actionType
-    : null;
-  const needsFollowUp = ['meeting', 'search_vendor'].includes(actionType);
-  const decision = ['active', 'pending_review', 'held', 'rejected'].includes(item.decision)
-    ? item.decision
-    : actionType === 'hold'
-      ? 'held'
-      : actionType === 'reject'
-        ? 'rejected'
-        : actionType
-          ? 'active'
-          : 'pending_review';
-
-  return {
-    id:            item.id || crypto.randomUUID(),
-    sentence:      item.sentence || '',
-    client:        item.client || '',
-    campaign:      item.campaign || '',
-    vendor:        item.vendor || '',
-    vendorContact: item.vendorContact || '',
-    actionType,
-    decision,
-    priority:        needsFollowUp ? item.priority || null : null,
-    deadline:        needsFollowUp ? item.deadline || null : null,
-    meetingDate:     actionType === 'meeting' ? item.meetingDate || null : null,
-    meetingTime:     actionType === 'meeting' ? item.meetingTime || null : null,
-    meetingLocation: actionType === 'meeting' ? item.meetingLocation || '' : '',
-    vendorSearchNote: actionType === 'search_vendor' ? item.vendorSearchNote || '' : '',
-    reminderDate:    needsFollowUp ? item.reminderDate || null : null,
-    reminderTime:    needsFollowUp ? item.reminderTime || null : null,
-    holdReason:      actionType === 'hold' ? item.holdReason || '' : '',
-    reviewOn:        actionType === 'hold' ? item.reviewOn || null : null,
-    rejectionReason: actionType === 'reject' ? item.rejectionReason || '' : '',
-    dateAdded:     item.dateAdded || new Date().toISOString(),
+$(function () {
+  var KEY = 'notesTriage.items.v1';
+  var API_BASE_URL = window.NOTES_TRIAGE_API_BASE_URL || 'http://localhost:3000';
+  var mode = 'standard';
+  var ACTIONS = {
+    meeting:  {label: 'Create meeting',  key: 'M'},
+    resource: {label: 'Resource search', key: 'R'},
+    hold:     {label: 'Hold',            key: 'H'},
+    reject:   {label: 'Reject',          key: 'X'}
   };
-}
+  var FIELDS = [['client','Client','text'],['campaign','Campaign','text'],['deadline','Deadline','date'],['reminderDate','Reminder date','date'],['reminderTime','Reminder time','time']];
+  var PRIORITIES = ['LOW', 'STANDARD', 'URGENT'];
+  var PRIORITY_RANK = {LOW: 1, STANDARD: 2, URGENT: 3};
+  var PRIORITY_STYLE = {LOW: 'bg-slate-100 text-slate-700', STANDARD: 'bg-teal-100 text-teal-900', URGENT: 'bg-red-100 text-red-800'};
 
-function loadItems() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-    if (!Array.isArray(parsed)) return [];
-    const items = parsed.map(normalizeItem);
-    // Migrate prior browser data to the current, deliberately small schema.
-    if (JSON.stringify(parsed) !== JSON.stringify(items)) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-    }
-    return items;
+  var items = load(), queue = [], qi = 0, editId = null, cur = {p: null, a: null};
+
+  function load() {
+    try {
+      var stored = JSON.parse(localStorage.getItem(KEY)) || [];
+      return Array.isArray(stored) ? stored.map(function (item) {
+        item.priority = normalizePriority(item.priority);
+        (item.history || []).forEach(function (entry) { entry.priority = normalizePriority(entry.priority); });
+        return item;
+      }) : [];
+    } catch (e) { return []; }
   }
-  catch { return []; }
-}
-
-function upsertItem(item) {
-  const items = loadItems();
-  const i = items.findIndex(x => x.id === item.id);
-  if (i >= 0) items[i] = item; else items.push(item);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-}
-
-// ── HELPERS ───────────────────────────────────────────────────
-function esc(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function fmtDate(iso) {
-  if (!iso) return '—';
-  const d = new Date(String(iso).slice(0, 10) + 'T00:00:00');
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-}
-
-function fmtDateTime(date, time) {
-  if (!date) return '—';
-  return `${fmtDate(date)}${time ? ` · ${time}` : ''}`;
-}
-
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function buildClientOptions(sel) {
-  let h = `<option value="">— Select client —</option>`;
-  mockData.clients.forEach(c => {
-    h += `<option value="${esc(c.name)}"${c.name === sel ? ' selected' : ''}>${esc(c.name)}</option>`;
-  });
-  return h + `<option value="__new__">＋ Add new client…</option>`;
-}
-
-function buildCampaignOptions(clientName, sel) {
-  const c = mockData.clients.find(x => x.name === clientName);
-  if (!c) return `<option value="">— Select campaign —</option>`;
-  let h = `<option value="">— Select campaign —</option>`;
-  c.projects.forEach(p => {
-    h += `<option value="${esc(p)}"${p === sel ? ' selected' : ''}>${esc(p)}</option>`;
-  });
-  return h;
-}
-
-// ── SENTENCE SPLITTING & DETECTION ────────────────────────────
-function splitSentences(text) {
-  const cleaned = text
-    .split('\n')
-    .filter(l => {
-      const t = l.trim();
-      return t.length > 0 && t !== '--' && !/^[\w\s]{1,25}:\s*.+$/.test(t);
-    })
-    .join(' ');
-
-  return nlp(cleaned)
-    .sentences()
-    .out('array')
-    .map(s => s.trim())
-    .filter(s => s.length > 5);
-}
-
-function detectClient(sentence) {
-  const low = sentence.toLowerCase();
-  for (const c of mockData.clients) {
-    if (low.includes(c.name.toLowerCase())) return c.name;
+  function persist() { try { localStorage.setItem(KEY, JSON.stringify(items)); } catch (e) {} }
+  function esc(s) { return $('<div>').text(s == null ? '' : s).html(); }
+  function normalizePriority(value) {
+    if (typeof value === 'string') value = value.trim().toUpperCase();
+    if (PRIORITIES.indexOf(value) >= 0) return value;
+    var legacy = Number(value);
+    if (legacy >= 1 && legacy <= 2) return 'LOW';
+    if (legacy === 3) return 'STANDARD';
+    if (legacy >= 4 && legacy <= 5) return 'URGENT';
+    return null;
   }
-  return '';
-}
+  function fmtD(d) { return new Date(d + 'T00:00').toLocaleDateString(undefined, {day: '2-digit', month: 'short', year: 'numeric'}); }
+  function prefill(t) {
+    var m = function (re) { var r = t.match(re); return r ? $.trim(r[1]) : ''; };
+    var sep = '(?:\\s*[:=]\\s*|\\s+[-\u2013\u2014]\\s+)';
+    return {client: m(new RegExp('^\\s*(?:brand|client)' + sep + '(.+)$', 'im')), campaign: m(new RegExp('^\\s*campaign' + sep + '(.+)$', 'im'))};
+  }
+  function split(t) { return t.split(/^[ \t]*--[ \t]*$/m).map(function (s) { return $.trim(s); }).filter(Boolean); }
+  function fmt(ts) { return new Date(ts).toLocaleString(undefined, {day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'}); }
+  function queuedText(entry) { return typeof entry === 'string' ? entry : entry.text; }
+  function setMode(next) {
+    mode = next;
+    $('#standardMode').attr('aria-pressed', String(mode === 'standard'))
+      .toggleClass('bg-teal-700 text-white', mode === 'standard')
+      .toggleClass('text-slate-600 hover:text-slate-900', mode !== 'standard');
+    $('#aiMode').attr('aria-pressed', String(mode === 'ai'))
+      .toggleClass('bg-teal-700 text-white', mode === 'ai')
+      .toggleClass('text-slate-600 hover:text-slate-900', mode !== 'ai');
+    $('#msg').text(mode === 'ai' ? 'AI mode interprets free-form notes and suggests fields for review.' : '');
+  }
 
-// ── MODAL: OPEN / CLOSE / STEP ────────────────────────────────
-function openModal(idx) {
-  modal.idx  = idx;
-  modal.step = 1;
-  modal.reviewItemId = null;
+  /* ---------- input ---------- */
+  $('#raw').on('input', function () {
+    var n = split($(this).val()).length;
+    $('#count').text(n ? n + (n === 1 ? ' note' : ' notes') + ' detected' : '');
+    $('#process').prop('disabled', !n);
+    $('#msg').text('');
+  });
+  $('#standardMode').on('click', function () { setMode('standard'); });
+  $('#aiMode').on('click', function () { setMode('ai'); });
+  $('#process').on('click', async function () {
+    var rawNotes = $('#raw').val();
+    if (!$.trim(rawNotes)) { $('#msg').text('No notes found. Paste some text first.'); return; }
+    qi = 0; editId = null;
+    if (mode === 'standard') {
+      queue = split(rawNotes);
+      if (!queue.length) { $('#msg').text('No notes found. Paste some text first.'); return; }
+      show(queue[0]);
+      return;
+    }
 
-  modal.data = {
-    client: detectClient(currentSentences[idx]),
-    sentence: currentSentences[idx],
-  };
-
-  $('#modalSentence').val(modal.data.sentence);
-  $('#decisionModalTitle').text(`Assign Action · ${idx + 1} of ${currentSentences.length}`);
-  populateStep1();
-  showStep(1);
-  $('#decisionModal').removeClass('hidden');
-}
-
-function openReviewModal(id) {
-  const item = loadItems().find(entry => entry.id === id);
-  if (!item) return;
-
-  modal = {
-    idx: null,
-    step: 1,
-    data: { ...item, actionType: null, decision: 'pending_review' },
-    reviewItemId: id
-  };
-  $('#modalSentence').val(modal.data.sentence);
-  $('#decisionModalTitle').text('Review decision');
-  populateStep1();
-  showStep(1);
-  $('#decisionModal').removeClass('hidden');
-}
-
-function closeModal() {
-  $('#decisionModal').addClass('hidden');
-  modal = { idx: null, step: 1, data: {}, reviewItemId: null };
-}
-
-function showStep(n) {
-  modal.step = n;
-  $('#step1, #step2, #step3').addClass('hidden');
-  $(`#step${n}`).removeClass('hidden');
-
-  const labels = { 1: 'Context', 2: 'Action', 3: 'Action setup' };
-  const stepCount = modalNeedsSetup() ? 3 : 2;
-  $('#stepLabel').text(`Step ${n} of ${stepCount} — ${labels[n]}`);
-
-  // Animate step dots: white = reached, semi-transparent = future
-  $('.step-dot').each(function () {
-    const s = +$(this).data('step');
-    $(this).toggleClass('hidden', s > stepCount);
-    $(this).css('background-color', s <= n ? 'rgba(255,255,255,1)' : 'rgba(255,255,255,0.3)');
+    var $button = $('#process').prop('disabled', true);
+    $('#processSpinner').removeClass('hidden');
+    $('#processCaption').text('Analyzing…');
+    $('#msg').text('Sending notes for AI analysis…');
+    try {
+      var response = await fetch(API_BASE_URL + '/api/triage', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({notes: rawNotes})
+      });
+      var payload = await response.json().catch(function () { return {}; });
+      console.log(payload);
+      if (!response.ok) throw new Error(payload.error || 'Could not analyze these notes.');
+      if (!Array.isArray(payload.items) || !payload.items.length) {
+        $('#msg').text('The AI could not find any items to review in these notes.');
+        return;
+      }
+      queue = payload.items.filter(function (item) { return item && item.sentence; }).map(function (item) {
+        var action = item.actionType === 'search_vendor' ? 'resource' : item.actionType;
+        return {
+          text: item.sentence,
+          sourceText: item.noteGroupText || rawNotes,
+          priority: item.priority,
+          action: ACTIONS[action] ? action : null,
+          rationale: item.rationale || '',
+          fields: {
+            client: item.client || '',
+            campaign: item.campaign || '',
+            deadline: item.deadline || '',
+            reminderDate: item.reminderDate || '',
+            reminderTime: item.reminderTime || '',
+            vendor: item.vendor || '',
+            vendorContact: item.vendorContact || '',
+            noteGroupText: item.noteGroupText || rawNotes,
+            meetingDate: item.meetingDate || '',
+            meetingTime: item.meetingTime || '',
+            meetingLocation: item.meetingLocation || '',
+            vendorSearchNote: item.vendorSearchNote || ''
+          }
+        };
+      });
+      if (!queue.length) { $('#msg').text('The AI response did not contain any reviewable items.'); return; }
+      $('#msg').text('AI suggestions loaded. Review each item before saving.');
+      show(queue[0]);
+    } catch (error) {
+      $('#msg').text(error.message || 'Could not reach the AI server. Check that it is running and try again.');
+    } finally {
+      $button.prop('disabled', !split($('#raw').val()).length);
+      $('#processSpinner').addClass('hidden');
+      $('#processCaption').text('Process notes');
+    }
   });
 
-  $('#modalBackBtn').toggleClass('hidden', n === 1);
-  const canSave = n === stepCount && (n !== 2 || Boolean(modal.data.actionType));
-  $('#modalNextBtn').toggleClass('hidden', canSave);
-  $('#modalSaveBtn').toggleClass('hidden', !canSave);
-  $('#modalSaveBtn').text(isTerminalAction() ? 'Save action' : 'Save');
-}
-
-function modalNeedsSetup() {
-  return ['meeting', 'search_vendor'].includes(modal.data.actionType);
-}
-
-function isTerminalAction() {
-  return ['hold', 'reject'].includes(modal.data.actionType);
-}
-
-// ── STEP 1: CONTEXT ───────────────────────────────────────────
-function populateStep1() {
-  $('#step1').html(`
-    <div class="space-y-1.5">
-      <label class="text-base font-semibold text-gray-500 uppercase tracking-wide">Client / Brand</label>
-      <select id="m_client" class="w-full border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300">
-        ${buildClientOptions(modal.data.client || '')}
-      </select>
-    </div>
-    <div class="space-y-1.5">
-      <label class="text-base font-semibold text-gray-500 uppercase tracking-wide">Campaign / Project</label>
-      <select id="m_campaign" class="w-full border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300">
-        ${buildCampaignOptions(modal.data.client || '', modal.data.campaign || '')}
-      </select>
-    </div>
-    <div class="space-y-1.5">
-      <label class="text-base font-semibold text-gray-500 uppercase tracking-wide">
-        Vendor <span class="text-gray-400 font-normal normal-case">(if applicable)</span>
-      </label>
-      <input id="m_vendor" type="text" value="${esc(modal.data.vendor || '')}" placeholder="e.g. WRPR"
-        class="w-full border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />
-    </div>
-    <div class="space-y-1.5">
-      <label class="text-base font-semibold text-gray-500 uppercase tracking-wide">
-        Vendor Contact <span class="text-gray-400 font-normal normal-case">(if applicable)</span>
-      </label>
-      <input id="m_vendorContact" type="text" value="${esc(modal.data.vendorContact || '')}" placeholder="e.g. Tyo &amp; Adhyt"
-        class="w-full border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />
-    </div>
-  `);
-}
-
-function collectStep1() {
-  modal.data.client        = $('#m_client').val();
-  modal.data.campaign      = $('#m_campaign').val();
-  modal.data.vendor        = $('#m_vendor').val().trim();
-  modal.data.vendorContact = $('#m_vendorContact').val().trim();
-}
-
-// ── STEP 2: ACTION ─────────────────────────────────────────────
-function fg(label, content) {
-  return `<div class="space-y-1.5">
-    <label class="text-base font-semibold text-gray-500 uppercase tracking-wide">${label}</label>
-    <div>${content}</div>
-  </div>`;
-}
-
-function priorityRow(sel) {
-  const btns = [1,2,3,4,5].map(n => {
-    const active = n === sel;
-    return `<button type="button" class="pri-chip w-10 h-10 rounded-xl border-2 text-sm font-bold transition-all
-             ${active ? 'bg-blue-600 text-white border-blue-600' : 'border-blue-100 text-blue-400 hover:border-blue-400'}"
-            data-value="${n}">${n}</button>`;
-  }).join('');
-  return `<div class="flex items-center gap-2">${btns}
-    <span class="text-base text-gray-400 ml-1">\u2190 Low \u00a0 High \u2192</span>
-  </div>`;
-}
-
-function populateStep2() {
-  const actionOptions = ACTION_TYPES.map(action => {
-    const active = modal.data.actionType === action.id;
-    return `<button type="button" class="action-chip text-left p-3 rounded-xl border-2 transition-all
-             ${active ? 'border-blue-600 bg-blue-50' : 'border-blue-100 hover:border-blue-300 bg-white'}"
-            data-value="${action.id}">
-      <div class="text-xl mb-1">${action.icon}</div>
-      <div class="text-base font-semibold text-gray-700">${action.label}</div>
-      <div class="text-base text-gray-400 mt-0.5 leading-tight">${action.desc}</div>
-    </button>`;
-  }).join('');
-
-  const actionDetails = modalNeedsSetup()
-    ? [
-        fg('Priority', priorityRow(modal.data.priority)),
-        fg('Preparation deadline', `<input type="date" id="m_deadline" value="${esc(modal.data.deadline || '')}"
-          class="border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />
-          <span class="text-base text-gray-400 ml-2">Leave blank if none</span>`),
-        fg('Reminder', `<div class="flex flex-wrap gap-2 items-center">
-          <input type="date" id="m_reminderDate" value="${esc(modal.data.reminderDate || '')}"
-            class="border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />
-          <input type="time" id="m_reminderTime" value="${esc(modal.data.reminderTime || '')}"
-            class="border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />
-          <span class="text-base text-gray-400">Optional</span>
-        </div>`),
-      ].join('')
-    : modal.data.actionType === 'hold'
-      ? [
-          fg('Reason for holding', `<textarea id="m_holdReason" rows="3" placeholder="Why should this wait? (optional)"
-            class="w-full resize-y rounded-lg border border-blue-100 bg-white px-3 py-2 text-sm text-gray-700 leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-300">${esc(modal.data.holdReason || '')}</textarea>`),
-          fg('Review on', `<input type="date" id="m_reviewOn" value="${esc(modal.data.reviewOn || '')}"
-            class="border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />
-            <span class="text-base text-gray-400 ml-2">Required</span>`),
-        ].join('')
-    : modal.data.actionType === 'reject'
-      ? fg('Reason for rejecting', `<textarea id="m_rejectionReason" rows="3" placeholder="Why is this not moving forward? (optional)"
-          class="w-full resize-y rounded-lg border border-blue-100 bg-white px-3 py-2 text-sm text-gray-700 leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-300">${esc(modal.data.rejectionReason || '')}</textarea>`)
-    : '';
-
-  const inner = [
-    '<p class="text-sm text-gray-500">What should happen with this item?</p>',
-    `<div class="grid grid-cols-2 gap-2.5">${actionOptions}</div>`,
-    actionDetails,
-  ].join('');
-  $('#step2').html(`<div class="space-y-4">${inner}</div>`);
-}
-
-function collectStep2() {
-  modal.data.priority = modalNeedsSetup()
-    ? $('.pri-chip.bg-blue-600').data('value') || null
-    : null;
-  modal.data.deadline = modalNeedsSetup() ? $('#m_deadline').val() || null : null;
-  modal.data.reminderDate = modalNeedsSetup() ? $('#m_reminderDate').val() || null : null;
-  modal.data.reminderTime = modalNeedsSetup() ? $('#m_reminderTime').val() || null : null;
-  modal.data.holdReason = modal.data.actionType === 'hold' ? $('#m_holdReason').val().trim() : '';
-  modal.data.reviewOn = modal.data.actionType === 'hold' ? $('#m_reviewOn').val() || null : null;
-  modal.data.rejectionReason = modal.data.actionType === 'reject' ? $('#m_rejectionReason').val().trim() : '';
-}
-
-// ── STEP 3: ACTION SETUP ───────────────────────────────────────
-function populateStep3() {
-  let inner = '';
-
-  if (modal.data.actionType === 'meeting') {
-    inner = [
-      fg('Meeting date', `<input type="date" id="m_meetingDate" value="${esc(modal.data.meetingDate || '')}"
-        class="border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />`),
-      fg('Start time', `<input type="time" id="m_meetingTime" value="${esc(modal.data.meetingTime || '')}"
-        class="border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />`),
-      fg('Location or meeting link', `<input type="text" id="m_meetingLocation" value="${esc(modal.data.meetingLocation || '')}"
-        placeholder="e.g. Google Meet or Client office"
-        class="w-full border border-blue-100 rounded-lg px-3 py-2 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-300" />`),
-    ].join('');
-  } else if (modal.data.actionType === 'search_vendor') {
-    inner = fg('Vendor search note', `<textarea id="m_vendorSearchNote" rows="5"
-      placeholder="Describe the vendor, capabilities, budget, or other requirements to search for."
-      class="w-full resize-y rounded-lg border border-blue-100 bg-white px-3 py-2 text-sm text-gray-700 leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-300">${esc(modal.data.vendorSearchNote || '')}</textarea>`);
-  }
-
-  $('#step3').html(`<div class="space-y-4">${inner}</div>`);
-}
-
-function collectStep3() {
-  if (modal.data.actionType === 'meeting') {
-    modal.data.meetingDate = $('#m_meetingDate').val() || null;
-    modal.data.meetingTime = $('#m_meetingTime').val() || null;
-    modal.data.meetingLocation = $('#m_meetingLocation').val().trim();
-  } else if (modal.data.actionType === 'search_vendor') {
-    modal.data.vendorSearchNote = $('#m_vendorSearchNote').val().trim();
-  }
-}
-
-// ── SAVE ──────────────────────────────────────────────────────
-function buildItem(decision, actionType = modal.data.actionType || null) {
-  const needsFollowUp = ['meeting', 'search_vendor'].includes(actionType);
-  modal.data.sentence = $('#modalSentence').val().trim() || currentSentences[modal.idx];
-  return {
-    id:            modal.reviewItemId || modal.data.id || crypto.randomUUID(),
-    sentence:      modal.data.sentence,
-    client:        modal.data.client        || '',
-    campaign:      modal.data.campaign      || '',
-    vendor:        modal.data.vendor        || '',
-    vendorContact: modal.data.vendorContact || '',
-    actionType,
-    decision,
-    priority:      needsFollowUp ? modal.data.priority || null : null,
-    deadline:      needsFollowUp ? modal.data.deadline || null : null,
-    meetingDate:     actionType === 'meeting' ? modal.data.meetingDate || null : null,
-    meetingTime:     actionType === 'meeting' ? modal.data.meetingTime || null : null,
-    meetingLocation: actionType === 'meeting' ? modal.data.meetingLocation || '' : '',
-    vendorSearchNote: actionType === 'search_vendor' ? modal.data.vendorSearchNote || '' : '',
-    reminderDate: needsFollowUp ? modal.data.reminderDate || null : null,
-    reminderTime: needsFollowUp ? modal.data.reminderTime || null : null,
-    holdReason: actionType === 'hold' ? modal.data.holdReason || '' : '',
-    reviewOn: actionType === 'hold' ? modal.data.reviewOn || null : null,
-    rejectionReason: actionType === 'reject' ? modal.data.rejectionReason || '' : '',
-    dateAdded:     modal.data.dateAdded     || new Date().toISOString(),
-  };
-}
-
-function continueToNextSentence() {
-  if (Number.isInteger(modal.idx)) {
-    const nextIdx = modal.idx + 1;
-    if (nextIdx < currentSentences.length) {
-      openModal(nextIdx);
-      return;
-    }
-  }
-  closeModal();
-}
-
-function commitSave() {
-  if (modal.step === 3) collectStep3(); else collectStep2();
-  const decision = modal.data.actionType === 'hold'
-    ? 'held'
-    : modal.data.actionType === 'reject'
-      ? 'rejected'
-      : 'active';
-  const item = buildItem(decision);
-  upsertItem(item);
-  renderTable();
-  continueToNextSentence();
-}
-
-function skipForNow() {
-  if (modal.step === 1) collectStep1();
-  if (modal.step === 2) collectStep2();
-  if (modal.step === 3) collectStep3();
-  upsertItem(buildItem('pending_review', null));
-  renderTable();
-  continueToNextSentence();
-}
-
-// ── TABLE ─────────────────────────────────────────────────────
-function renderTable() {
-  const items = loadItems();
-  const activeItems = items.filter(item => item.decision === 'active');
-  const reviewItems = items.filter(item => item.decision === 'pending_review'
-    || (item.decision === 'held' && (!item.reviewOn || item.reviewOn <= todayIso())));
-  const rejectedItems = items.filter(item => item.decision === 'rejected');
-
-  // Sort: priority desc (5 = highest, null = last), then deadline asc (null = last)
-  activeItems.sort((a, b) => {
-    const pa = a.priority || 0, pb = b.priority || 0;
-    if (pa !== pb) return pb - pa;
-    if (!a.deadline && !b.deadline) return 0;
-    if (!a.deadline) return 1;
-    if (!b.deadline) return -1;
-    return new Date(a.deadline) - new Date(b.deadline);
+  $('#reset').on('click', function () {
+    if (!window.confirm('Delete all saved notes and decisions from this browser? This cannot be undone.')) return;
+    localStorage.removeItem(KEY);
+    items = [];
+    render();
+    localStorage.removeItem(KEY);
+    $('#msg').text('All saved records have been deleted.');
   });
 
-  $('#itemCount').text(`${activeItems.length} item${activeItems.length !== 1 ? 's' : ''}`);
-
-  const ACT = Object.fromEntries(ACTION_TYPES.map(action => [action.id, action.label]));
-  const PRI_CLASS = { 5: 'text-red-600 font-bold', 4: 'text-orange-500 font-semibold', 3: 'text-amber-500 font-medium' };
-
-  const rows = activeItems.map(item => {
-    const priClass  = PRI_CLASS[item.priority]   || 'text-gray-400';
-
-    return `<tr class="hover:bg-blue-50/40 transition-colors">
-      <td class="px-4 py-3 max-w-[180px]">
-        <p class="text-base text-gray-700 leading-relaxed line-clamp-2" title="${esc(item.sentence)}">${esc(item.sentence)}</p>
-      </td>
-      <td class="px-4 py-3 text-base text-gray-700 whitespace-nowrap">${esc(item.client   || '—')}</td>
-      <td class="px-4 py-3 text-base text-gray-600 whitespace-nowrap">${esc(item.campaign || '—')}</td>
-      <td class="px-4 py-3 text-base text-gray-600 whitespace-nowrap">${esc(ACT[item.actionType] || '—')}</td>
-      <td class="px-4 py-3 text-center">
-        ${item.priority
-          ? `<span class="text-sm ${priClass}">${item.priority}</span>`
-          : '<span class="text-gray-300 text-sm">—</span>'}
-      </td>
-      <td class="px-4 py-3 text-base text-gray-600 whitespace-nowrap">${fmtDate(item.deadline)}</td>
-      <td class="px-4 py-3 text-base text-gray-600 whitespace-nowrap">${fmtDateTime(item.reminderDate, item.reminderTime)}</td>
-      <td class="px-4 py-3 text-base text-gray-400 whitespace-nowrap">${fmtDate(item.dateAdded)}</td>
-    </tr>`;
-  }).join('') || `<tr><td colspan="8" class="px-4 py-8 text-center text-sm text-gray-400">No active items right now.</td></tr>`;
-
-  $('#tableBody').html(rows);
-  $('#tableSection').toggleClass('hidden', !items.length);
-
-  const reviewRows = reviewItems.map(item => {
-    const held = item.decision === 'held';
-    const reason = held ? item.holdReason || 'Held item is ready for review' : 'Skipped for later review';
-    return `<tr class="hover:bg-blue-50/40 transition-colors">
-      <td class="px-4 py-3 max-w-[280px]"><p class="text-base text-gray-700 leading-relaxed line-clamp-2" title="${esc(item.sentence)}">${esc(item.sentence)}</p></td>
-      <td class="px-4 py-3 text-base text-gray-600">${esc(reason)}</td>
-      <td class="px-4 py-3 text-base text-gray-600 whitespace-nowrap">${held ? fmtDate(item.reviewOn) : '—'}</td>
-      <td class="px-4 py-3 text-right"><button class="review-item border border-blue-200 text-blue-700 font-semibold px-3 py-1.5 rounded-lg text-sm hover:bg-blue-50 transition" data-item-id="${esc(item.id)}">Review</button></td>
-    </tr>`;
-  }).join('');
-  $('#reviewCount').text(`${reviewItems.length} item${reviewItems.length !== 1 ? 's' : ''}`);
-  $('#reviewTableBody').html(reviewRows);
-  $('#reviewSection').toggleClass('hidden', !reviewItems.length);
-
-  const rejectedRows = rejectedItems.map(item => `<tr class="hover:bg-blue-50/40 transition-colors">
-    <td class="px-4 py-3 max-w-[280px]"><p class="text-base text-gray-700 leading-relaxed line-clamp-2" title="${esc(item.sentence)}">${esc(item.sentence)}</p></td>
-    <td class="px-4 py-3 text-base text-gray-600">${esc(item.rejectionReason || 'No reason given')}</td>
-    <td class="px-4 py-3 text-base text-gray-400 whitespace-nowrap">${fmtDate(item.dateAdded)}</td>
-    <td class="px-4 py-3 text-right"><button class="restore-item border border-blue-200 text-blue-700 font-semibold px-3 py-1.5 rounded-lg text-sm hover:bg-blue-50 transition" data-item-id="${esc(item.id)}">Restore</button></td>
-  </tr>`).join('');
-  $('#rejectedCount').text(`${rejectedItems.length} item${rejectedItems.length !== 1 ? 's' : ''}`);
-  $('#rejectedTableBody').html(rejectedRows);
-  $('#rejectedSection').toggleClass('hidden', !rejectedItems.length);
-}
-
-// ── EVENT: Analyze ─────────────────────────────────────────────
-$('#analyzeBtn').on('click', function () {
-  const text = $('#noteInput').val().trim();
-  if (!text) return;
-  const sentences = splitSentences(text);
-  if (!sentences.length) {
-    alert('No sentences detected. Try writing at least one complete sentence.');
-    return;
+  /* ---------- modal ---------- */
+  function show(entry, existing) {
+    var text = typeof entry === 'string' ? entry : entry.text;
+    var suggestion = typeof entry === 'string' ? null : entry;
+    var values = existing || suggestion;
+    cur = {
+      p: values ? normalizePriority(values.priority) : null,
+      a: values ? values.action : null,
+      suggestedP: suggestion ? normalizePriority(suggestion.priority) : null
+    };
+    $('#mtitle').text(editId ? 'Change decision' : 'Note ' + (qi + 1) + ' of ' + queue.length);
+    $('#bar').css('width', (editId ? 100 : (qi / queue.length) * 100) + '%');
+    $('#ntext').text(text); $('#err').text('');
+    $('#rationale').text(suggestion && suggestion.rationale ? 'AI suggestion: ' + suggestion.rationale : '').toggleClass('hidden', !(suggestion && suggestion.rationale));
+    $('#priHint').text(cur.suggestedP ? 'AI suggested: ' + cur.suggestedP : '').toggleClass('hidden', !cur.suggestedP);
+    var source = suggestion && suggestion.sourceText;
+    $('#sourceText').text(source || '');
+    $('#sourceNote').toggleClass('hidden', !source || source === text);
+    var $p = $('#pri').empty();
+    $.each(PRIORITIES, function (_, priority) {
+      $p.append('<button type="button" aria-pressed="false" data-p="' + priority + '" class="pb rounded-md border px-3 py-2 text-sm font-semibold">' + priority + '</button>');
+    });
+    var $a = $('#act').empty();
+    $.each(ACTIONS, function (k, v) { $a.append('<button type="button" data-a="' + k + '" class="ab rounded-md border px-3 py-2 text-left text-sm">' + v.label + ' <span class="float-right text-slate-400">' + v.key + '</span></button>'); });
+    paint(); fields(values && values.fields ? values.fields : prefill(text));
+    $('#modal').removeClass('hidden').addClass('flex');
   }
-  currentSentences = sentences;
-  openModal(0);
-});
-
-// ── EVENT: Close modal ─────────────────────────────────────────
-$('#closeDecisionModal').on('click', closeModal);
-$('#decisionModal').on('click', function (e) {
-  if ($(e.target).is('#decisionModal')) closeModal();
-});
-
-// ── EVENT: Client select in modal ─────────────────────────────
-$(document).on('change', '#m_client', function () {
-  const val = $(this).val();
-  if (val === '__new__') {
-    pendingNewClient = 'modal';
-    $('#newClientName, #newClientProject').val('');
-    $('#newClientModal').removeClass('hidden');
-    return;
+  function paint() {
+    $('.pb').each(function () {
+      var p = $(this).data('p'), on = cur.p === p;
+      $(this).attr('aria-pressed', String(on)).attr('class', 'pb rounded-md border px-3 py-2 text-sm font-semibold ' + (on ? PRIORITY_STYLE[p] + ' border-transparent ring-2 ring-slate-900' : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'));
+    });
+    $('.ab').each(function () {
+      var on = cur.a === $(this).data('a');
+      $(this).attr('class', 'ab rounded-md border px-3 py-2 text-left text-sm ' + (on ? 'border-teal-700 bg-teal-50 font-medium text-teal-900 ring-1 ring-teal-700' : 'border-slate-300 bg-white hover:bg-slate-50'));
+    });
   }
-  modal.data.client = val;
-  $('#m_campaign').html(buildCampaignOptions(val, ''));
-});
-
-// ── EVENT: Action selection ───────────────────────────────────
-$(document).on('click', '.action-chip', function () {
-  collectStep2();
-  modal.data.actionType = $(this).data('value');
-  populateStep2();
-  showStep(2);
-});
-
-// ── EVENT: Priority chip ───────────────────────────────────────
-$(document).on('click', '.pri-chip', function () {
-  $('.pri-chip')
-    .removeClass('bg-blue-600 text-white border-blue-600')
-    .addClass('border-blue-100 text-blue-400');
-  $(this)
-    .addClass('bg-blue-600 text-white border-blue-600')
-    .removeClass('border-blue-100 text-blue-400');
-});
-
-// ── EVENT: Modal Next ─────────────────────────────────────────
-$('#modalNextBtn').on('click', function () {
-  if (modal.step === 1) {
-    collectStep1();
-    if (!modal.data.client || modal.data.client === '__new__') {
-      alert('Please select a client before proceeding.');
-      return;
+  function fields(vals) {
+    vals = vals || {};
+    if (vals.reminder && !vals.reminderDate) {
+      vals = $.extend({}, vals, {
+        reminderDate: vals.reminder.slice(0, 10),
+        reminderTime: vals.reminder.slice(11, 16)
+      });
     }
-    populateStep2();
-    showStep(2);
-  } else if (modal.step === 2) {
-    collectStep2();
-    if (!modal.data.actionType) {
-      alert('Please select an action before proceeding.');
-      return;
+    var $f = $('#fields').empty();
+    $.each(FIELDS, function (_, f) {
+      var v = vals[f[0]] || '', ctl;
+      if (f[2].indexOf('select:') === 0) {
+        ctl = '<select data-k="' + f[0] + '" class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">' +
+          f[2].slice(7).split(',').map(function (o) { return '<option' + (o === v ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select>';
+      } else {
+        ctl = '<input data-k="' + f[0] + '" type="' + f[2] + '"' + (f[0] === 'client' || f[0] === 'campaign' ? ' list="dl-' + f[0] + '"' : '') + ' value="' + esc(v).replace(/"/g, '&quot;') + '" class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm">';
+      }
+      $f.append('<label class="block text-sm"><span class="mb-1 block text-slate-600">' + f[1] + '</span>' + ctl + '</label>');
+    });
+  }
+  function pickP(p) { cur.p = p; paint(); }
+  function pickA(a) { var old = collect(); cur.a = a; paint(); fields(old); }
+  function collect() { var o = {}; $('#fields [data-k]').each(function () { o[$(this).data('k')] = $.trim($(this).val()); }); return o; }
+  $('#pri').on('click', '.pb', function () { pickP($(this).data('p')); });
+  $('#act').on('click', '.ab', function () { pickA($(this).data('a')); });
+
+  function close() { $('#modal').addClass('hidden').removeClass('flex'); }
+  function stop() {
+    if (!editId) $('#raw').val(queue.slice(qi).map(queuedText).join('\n--\n')).trigger('input');
+    editId = null; close(); render();
+  }
+  function saveDecision() {
+    if (!cur.p) { $('#err').text('Choose a priority level.'); return; }
+    if (!cur.a) { $('#err').text('Choose an action.'); return; }
+    var now = Date.now(), f = collect();
+    if (editId) {
+      var it = items.filter(function (x) { return x.id === editId; })[0];
+      it.history = (it.history || []).concat([{at: it.decidedAt, priority: it.priority, action: it.action}]);
+      it.priority = cur.p; it.action = cur.a; it.fields = f; it.decidedAt = now;
+      editId = null; close(); render(); return;
     }
-    if (isTerminalAction()) {
-      commitSave();
-      return;
-    }
-    populateStep3();
-    showStep(3);
+    items.unshift({id: now + '-' + Math.random().toString(36).slice(2, 7), text: queuedText(queue[qi]), sourceText: queue[qi].sourceText || '', priority: cur.p, action: cur.a, fields: f, addedAt: now, decidedAt: now, history: []});
+    persist(); qi++;
+    if (qi >= queue.length) { $('#raw').val('').trigger('input'); close(); render(); }
+    else { persist(); show(queue[qi]); }
   }
-});
+  $('#save').on('click', function () { saveDecision(); if (!$('#modal').hasClass('flex')) persist(); });
+  $('#stop').on('click', stop);
+  $(document).on('keydown', function (e) {
+    if (!$('#modal').hasClass('flex')) return;
+    if (e.key === 'Escape') { stop(); return; }
+    var tag = e.target.tagName;
+    if (e.key === 'Enter' && tag !== 'TEXTAREA') { e.preventDefault(); saveDecision(); persist(); return; }
+    if (tag === 'INPUT' || tag === 'SELECT' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (/^[1-3]$/.test(e.key)) pickP(PRIORITIES[Number(e.key) - 1]);
+    var k = e.key.toUpperCase();
+    $.each(ACTIONS, function (a, v) { if (v.key === k) pickA(a); });
+  });
 
-// ── EVENT: Modal Back ─────────────────────────────────────────
-$('#modalBackBtn').on('click', function () {
-  if (modal.step === 2) {
-    collectStep2();
-    populateStep1();
-    showStep(1);
-  } else if (modal.step === 3) {
-    collectStep3();
-    populateStep2();
-    showStep(2);
+  /* ---------- table ---------- */
+  $('#fa').html('<option value="">All actions</option>' + $.map(ACTIONS, function (v, k) { return '<option value="' + k + '">' + v.label + '</option>'; }).join(''));
+  $('#fp').html('<option value="">All priorities</option>' + PRIORITIES.map(function (p) { return '<option value="' + p + '">' + p + '</option>'; }).join(''));
+  $('#q, #fa, #fp, #fs').on('input change', render);
+
+  function render() {
+    var q = $.trim($('#q').val()).toLowerCase(), fa = $('#fa').val(), fp = $('#fp').val();
+    var list = items.filter(function (it) {
+      if (fa && it.action !== fa) return false;
+      if (fp && normalizePriority(it.priority) !== fp) return false;
+      return !q || (it.text + ' ' + $.map(it.fields, function (v) { return v; }).join(' ')).toLowerCase().indexOf(q) > -1;
+    });
+    var so = $('#fs').val();
+    if (so === 'due') list.sort(function (a, b) { var x = a.fields.deadline || '9999', y = b.fields.deadline || '9999'; return x < y ? -1 : x > y ? 1 : 0; });
+    if (so === 'pri') list.sort(function (a, b) { return (PRIORITY_RANK[normalizePriority(b.priority)] || 0) - (PRIORITY_RANK[normalizePriority(a.priority)] || 0) || b.decidedAt - a.decidedAt; });
+    var $r = $('#rows').empty();
+    $.each(list, function (_, it) {
+      var f = it.fields || {}, dash = '<span class="text-slate-300">&mdash;</span>';
+      $r.append('<tr class="align-top hover:bg-slate-50">' +
+        '<td class="max-w-xs px-4 py-3"><button class="tg text-left text-slate-700" title="Show or hide full note"><span class="clamp">' + esc(it.text) + '</span></button></td>' +
+        '<td class="px-4 py-3">' + (esc(f.client) || dash) + '</td>' +
+        '<td class="px-4 py-3">' + (esc(f.campaign) || dash) + '</td>' +
+        '<td class="px-4 py-3 font-medium">' + ACTIONS[it.action].label + '</td>' +
+        '<td class="px-4 py-3"><span class="inline-flex rounded px-2.5 py-1 text-xs font-semibold ' + (PRIORITY_STYLE[normalizePriority(it.priority)] || 'bg-slate-100 text-slate-500') + '">' + (normalizePriority(it.priority) || '—') + '</span></td>' +
+        '<td class="px-4 py-3">' + (f.deadline ? fmtD(f.deadline) : dash) + '</td>' +
+        '<td class="px-4 py-3">' + (f.reminderDate ? fmtD(f.reminderDate) + (f.reminderTime ? ' ' + esc(f.reminderTime) : '') : (f.reminder ? fmt(f.reminder) : dash)) + '</td>' +
+        '<td class="px-4 py-3 text-slate-500">' + fmt(it.addedAt || it.decidedAt) + '</td>' +
+        '<td class="px-4 py-3 text-right"><button data-id="' + it.id + '" class="ed text-teal-700 hover:underline">Change</button> <button data-id="' + it.id + '" class="dl ml-2 text-slate-400 hover:text-red-600">Delete</button></td></tr>');
+    });
+    $('#empty').toggleClass('hidden', list.length > 0).text(items.length ? 'No decisions match these filters.' : 'No decisions yet. Paste your notes above and select Process notes.');
+    $.each(['client', 'campaign'], function (_, k) {
+      var seen = {};
+      $('#dl-' + k).html($.map(items, function (i) { var v = (i.fields || {})[k]; if (!v || seen[v]) return null; seen[v] = 1; return '<option value="' + esc(v).replace(/"/g, '&quot;') + '">'; }).join(''));
+    });
+    var hold = items.filter(function (i) { return i.action === 'hold'; }).length;
+    $('#stats').text(items.length + ' decisions' + (hold ? ' · ' + hold + ' on hold' : ''));
+    persist();
   }
+  $('#rows').on('click', '.tg span', function () { $(this).toggleClass('expanded'); });
+  $('#rows').on('click', '.ed', function () {
+    var id = $(this).data('id'), it = items.filter(function (x) { return x.id === id; })[0];
+    editId = id; show(it.text, it);
+  });
+  $('#rows').on('click', '.dl', function () {
+    if (!confirm('Delete this decision? The note text will be removed too.')) return;
+    var id = $(this).data('id'); items = items.filter(function (x) { return x.id !== id; }); render();
+  });
+
+  render();
 });
-
-// ── EVENT: Modal Save ─────────────────────────────────────────
-$('#modalSaveBtn').on('click', function () {
-  if (!modal.data.actionType) {
-    alert('Please select an action before saving.');
-    return;
-  }
-
-  if (modal.step === 3) {
-    collectStep3();
-    if (modal.data.actionType === 'meeting' && !modal.data.meetingDate) {
-      alert('Please set the meeting date before saving.');
-      return;
-    }
-    if (modal.data.actionType === 'search_vendor' && !modal.data.vendorSearchNote) {
-      alert('Please enter a vendor search note before saving.');
-      return;
-    }
-  }
-
-  if (modal.step === 2) collectStep2();
-  if (modal.data.actionType === 'hold' && !modal.data.reviewOn) {
-    alert('Please set a review date before holding this item.');
-    return;
-  }
-  if (modal.data.reminderTime && !modal.data.reminderDate) {
-    alert('Please set a reminder date when choosing a reminder time.');
-    return;
-  }
-
-  commitSave();
-});
-
-// ── EVENT: Skip / review / restore ────────────────────────────
-$('#modalSkipBtn').on('click', skipForNow);
-
-$(document).on('click', '.review-item', function () {
-  openReviewModal($(this).data('item-id'));
-});
-
-$(document).on('click', '.restore-item', function () {
-  const id = $(this).data('item-id');
-  const items = loadItems();
-  const item = items.find(entry => entry.id === id);
-  if (!item) return;
-  item.actionType = null;
-  item.decision = 'pending_review';
-  item.rejectionReason = '';
-  upsertItem(item);
-  renderTable();
-});
-
-// ── EVENT: Reset saved app data ───────────────────────────────
-$('#resetBtn').on('click', function () {
-  const confirmed = window.confirm('Reset all saved items? This cannot be undone.');
-  if (!confirmed) return;
-  localStorage.removeItem(STORAGE_KEY);
-  renderTable();
-});
-
-// ── NEW CLIENT MODAL ──────────────────────────────────────────
-$('#cancelNewClient').on('click', function () {
-  $('#newClientModal').addClass('hidden');
-  if (pendingNewClient === 'modal') $('#m_client').val(modal.data.client || '');
-  pendingNewClient = null;
-});
-
-$('#confirmNewClient').on('click', function () {
-  const name    = $('#newClientName').val().trim();
-  const project = $('#newClientProject').val().trim();
-  if (!name) { alert('Please enter a client name.'); return; }
-
-  mockData.clients.push({ name, projects: project ? [project, 'General'] : ['General'] });
-
-  if (pendingNewClient === 'modal') {
-    $('#m_client').html(buildClientOptions(name)).val(name);
-    $('#m_campaign').html(buildCampaignOptions(name, ''));
-    modal.data.client = name;
-  }
-
-  $('#newClientModal').addClass('hidden');
-  pendingNewClient = null;
-});
-
-$('#newClientModal').on('click', function (e) {
-  if ($(e.target).is('#newClientModal')) $('#cancelNewClient').trigger('click');
-});
-
-// Render records saved in a previous browser session.
-renderTable();
-
-// ── INIT ──────────────────────────────────────────────────────
-$(function () { renderTable(); });

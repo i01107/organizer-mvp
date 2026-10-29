@@ -44,7 +44,7 @@ So, for every 1 sentence, I want you to build a card.
 If no 2 is "NO", it will be saved as a note only
 
 If no 2 is "YES", show a form to :
-1. Choose the priority ( the range will be 1 - 5 )
+1. Review the AI-suggested priority (LOW, STANDARD, or URGENT) and adjust it if needed.
 2. Setup the deadline
 
 On this part, I need you to be creative on how it should be shown in a simple, yet elegant way
@@ -122,3 +122,18 @@ Improve the wizard and saved data while keeping the current core flow: one sente
 
 Keep the existing styling, localStorage persistence, automatic sentence-by-sentence flow, and current action types. Migrate existing localStorage records safely so new fields have sensible empty values and no saved items are lost.
 <!-- End of Task 10 -->
+
+# Task 11
+## Context
+Improve note analysis so `--` on its own line is treated as an optional separator between meeting-note groups. A group can contain multiple sentences that need shared context to be understood.
+
+Keep sentence-by-sentence decisions, but add these behaviors:
+
+1. Split input into note groups using `--`, then split each group into sentences. Notes without `--` must continue to work as one group.
+2. Preserve the original note-group text and a `noteGroupId` with every saved item.
+3. Detect client context from the whole group, not only the individual sentence, and prefill it in the decision modal.
+4. Show the original note group as a reference while deciding on one of its sentences.
+5. In the context step, offer a checked-by-default option to apply the selected client, campaign, vendor, and vendor contact to the remaining sentences in the same group. The user must be able to turn it off.
+
+Keep all existing action flows, review queue, localStorage migration, and styling unchanged where possible.
+<!-- End of Task 11 -->
