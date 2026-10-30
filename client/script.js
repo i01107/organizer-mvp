@@ -129,6 +129,36 @@ $(function () {
     }
   });
 
+  var NOTICE_ICONS = {
+    success: '<svg class="h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path stroke-linecap="round" stroke-linejoin="round" d="m8 12.5 2.8 2.8L16 9.5"/></svg>',
+    danger: '<svg class="h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3.5 2.5 20h19L12 3.5ZM12 10v4.5m0 2.5h.01"/></svg>'
+  };
+  function wakeNotice(kind, message) {
+    $('#wakeNotice')
+      .attr('class', 'mt-3 flex items-center gap-2 rounded-md border px-3 py-2 text-sm ' +
+        (kind === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-red-200 bg-red-50 text-red-800'))
+      .html(NOTICE_ICONS[kind] + '<span>' + esc(message) + '</span>');
+  }
+  $('#wake').on('click', async function () {
+    var $button = $(this).prop('disabled', true);
+    $('#wakeNotice').addClass('hidden').removeClass('flex');
+    $('#wakeDots').removeClass('hidden');
+    var controller = new AbortController();
+    // Render free instances can take a minute or more to wake from sleep.
+    var timer = setTimeout(function () { controller.abort(); }, 120000);
+    try {
+      var response = await fetch(API_BASE_URL + '/', {method: 'GET', signal: controller.signal});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      wakeNotice('success', 'AI Server activated, you can use the AI mode');
+    } catch (error) {
+      wakeNotice('danger', 'AI Server failed to get activated');
+    } finally {
+      clearTimeout(timer);
+      $('#wakeDots').addClass('hidden');
+      $button.prop('disabled', false);
+    }
+  });
+
   $('#reset').on('click', function () {
     if (!window.confirm('Delete all saved notes and decisions from this browser? This cannot be undone.')) return;
     localStorage.removeItem(KEY);
