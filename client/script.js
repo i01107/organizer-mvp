@@ -202,10 +202,15 @@ $(function () {
   $('#act').on('click', '.ab', function () { pickA($(this).data('a')); });
 
   function close() { $('#modal').addClass('hidden').removeClass('flex'); }
+  function askAboutNotes() { $('#confirmModal').removeClass('hidden').addClass('flex'); $('#keepNotes').trigger('focus'); }
+  function closeConfirm() { $('#confirmModal').addClass('hidden').removeClass('flex'); }
   function stop() {
-    if (!editId) $('#raw').val(queue.slice(qi).map(queuedText).join('\n--\n')).trigger('input');
+    var wasEditing = !!editId;
     editId = null; close(); render();
+    if (!wasEditing) askAboutNotes();
   }
+  $('#keepNotes').on('click', closeConfirm);
+  $('#deleteNotes').on('click', function () { $('#raw').val('').trigger('input'); closeConfirm(); });
   function saveDecision() {
     if (!cur.p) { $('#err').text('Choose a priority level.'); return; }
     if (!cur.a) { $('#err').text('Choose an action.'); return; }
@@ -218,12 +223,13 @@ $(function () {
     }
     items.unshift({id: now + '-' + Math.random().toString(36).slice(2, 7), text: queuedText(queue[qi]), sourceText: queue[qi].sourceText || '', priority: cur.p, action: cur.a, fields: f, addedAt: now, decidedAt: now, history: []});
     persist(); qi++;
-    if (qi >= queue.length) { $('#raw').val('').trigger('input'); close(); render(); }
+    if (qi >= queue.length) { close(); render(); askAboutNotes(); }
     else { persist(); show(queue[qi]); }
   }
   $('#save').on('click', function () { saveDecision(); if (!$('#modal').hasClass('flex')) persist(); });
   $('#stop').on('click', stop);
   $(document).on('keydown', function (e) {
+    if ($('#confirmModal').hasClass('flex')) { if (e.key === 'Escape') closeConfirm(); return; }
     if (!$('#modal').hasClass('flex')) return;
     if (e.key === 'Escape') { stop(); return; }
     var tag = e.target.tagName;
